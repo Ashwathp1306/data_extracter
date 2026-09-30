@@ -6,13 +6,7 @@ export const api = axios.create({
   baseURL: API_URL,
 });
 
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
-  if (token) {
-    config.headers.set('Authorization', `Bearer ${token}`);
-  }
-  return config;
-});
+
 
 export interface StudentValidation {
   reg_no: string;
@@ -112,50 +106,3 @@ export const getGithubStatus = async (): Promise<GithubStatus> => {
   return response.data;
 };
 
-export interface WeeklyAnalysisItem {
-  reg_no: string;
-  name: string;
-  easy: number;
-  medium: number;
-  hard: number;
-  current_total: number;
-  previous_total: number | "N/A";
-  this_week: number | "N/A";
-}
-
-export const getWeeklyAnalysis = async (fromDate?: string, toDate?: string): Promise<{ analysis: WeeklyAnalysisItem[] }> => {
-  const params = new URLSearchParams();
-  if (fromDate) params.append('from_date', fromDate);
-  if (toDate) params.append('to_date', toDate);
-  const response = await api.get<{ analysis: WeeklyAnalysisItem[] }>(`/weekly-analysis?${params.toString()}`);
-  return response.data;
-};
-
-export const downloadWeeklyAnalysisExcel = async (fromDate?: string, toDate?: string) => {
-  const params = new URLSearchParams();
-  if (fromDate) params.append('from_date', fromDate);
-  if (toDate) params.append('to_date', toDate);
-  
-  const response = await api.get(`/weekly-analysis/download?${params.toString()}`, {
-    responseType: 'blob'
-  });
-  
-  // Create a blob URL and trigger download
-  const url = window.URL.createObjectURL(new Blob([response.data]));
-  const link = document.createElement('a');
-  link.href = url;
-  
-  // Try to extract filename from content-disposition header if present
-  let filename = 'weekly_analysis.xlsx';
-  const disposition = response.headers['content-disposition'];
-  if (disposition && disposition.indexOf('filename=') !== -1) {
-    const matches = /filename="([^"]*)"/.exec(disposition);
-    if (matches && matches[1]) filename = matches[1];
-  }
-  
-  link.setAttribute('download', filename);
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.URL.revokeObjectURL(url);
-};

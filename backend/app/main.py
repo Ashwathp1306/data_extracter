@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.endpoints import router
-from app.api import auth
 from app.db import engine, Base
 
 Base.metadata.create_all(bind=engine)
@@ -16,7 +15,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(router, prefix="/api")
 
 @app.get("/health")

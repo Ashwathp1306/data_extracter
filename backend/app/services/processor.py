@@ -165,9 +165,9 @@ async def process_job(job_id: str, valid_students: list[StudentValidation]):
             
         job["status"] = "Completed"
         
-        # Save to DB if user_id is present
-        user_id = job.get("user_id")
-        if user_id:
+        # Save to DB unconditionally since auth is removed
+        user_id = job.get("user_id") or 1
+        if True:
             from app.db import SessionLocal
             from app.models.db_models import Report, StudentSnapshot
             import json

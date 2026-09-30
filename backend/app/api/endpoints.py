@@ -6,7 +6,7 @@ from app.utils.excel import validate_excel, generate_report_excel
 from app.services.processor import create_job, process_job, get_job_status, get_job_results, jobs_store
 from app.models.schemas import ValidationResponse, JobStatus, JobResultResponse, StudentResult
 from app.models.db_models import User, Report, StudentSnapshot
-from app.utils.security import get_current_user
+
 from app.db import get_db
 from app.services.github import check_github_rate_limit
 import os
@@ -25,7 +25,7 @@ async def github_rate_limit():
     return await check_github_rate_limit()
 
 @router.post("/upload", response_model=ValidationResponse)
-async def upload_excel(file: UploadFile = File(...), current_user: User = Depends(get_current_user)):
+async def upload_excel(file: UploadFile = File(...)):
     if not file.filename.endswith(('.xlsx', '.xls')):
         raise HTTPException(status_code=400, detail="Only .xlsx or .xls files are supported")
         
@@ -38,7 +38,7 @@ async def upload_excel(file: UploadFile = File(...), current_user: User = Depend
     valid_count = sum(1 for s in students if s.is_valid)
     invalid_count = len(students) - valid_count
     
-    job_id = create_job(students, user_id=current_user.id)
+    job_id = create_job(students)
     
     return ValidationResponse(
         job_id=job_id,
@@ -49,7 +49,7 @@ async def upload_excel(file: UploadFile = File(...), current_user: User = Depend
     )
 
 @router.post("/analyze/{job_id}")
-async def analyze_job(job_id: str, background_tasks: BackgroundTasks, current_user: User = Depends(get_current_user)):
+async def analyze_job(job_id: str, background_tasks: BackgroundTasks):
     if job_id not in jobs_store:
         raise HTTPException(status_code=404, detail="Job not found")
         
@@ -118,8 +118,8 @@ async def download_report(job_id: str, db: Session = Depends(get_db)):
     )
 
 @router.get("/history")
-async def get_history(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    reports = db.query(Report).filter(Report.user_id == current_user.id).order_by(Report.created_at.desc()).all()
+async def get_history(db: Session = Depends(get_db)):
+    reports = db.query(Report).order_by(Report.created_at.desc()).all()
     history = []
     for r in reports:
         results = json.loads(r.results_json)
@@ -132,104 +132,7 @@ async def get_history(current_user: User = Depends(get_current_user), db: Sessio
         })
     return {"reports": history}
 
-def get_analysis_for_date_range(db: Session, user_id: int, from_date_str: str = None, to_date_str: str = None):
-    snapshots = db.query(StudentSnapshot).filter(StudentSnapshot.user_id == user_id).order_by(StudentSnapshot.created_at.desc()).all()
-    
-    from_date = None
-    to_date = None
-    if from_date_str:
-        from_date = datetime.strptime(from_date_str, "%Y-%m-%d").date()
-    if to_date_str:
-        to_date = datetime.strptime(to_date_str, "%Y-%m-%d").date()
-        
-    grouped = {}
-    for s in snapshots:
-        if s.reg_no not in grouped:
-            grouped[s.reg_no] = []
-        grouped[s.reg_no].append(s)
-        
-    analysis = []
-    for reg_no, snaps in grouped.items():
-        if not snaps:
-            continue
-            
-        if from_date and to_date:
-            valid_snaps = [s for s in snaps if s.created_at.date() <= to_date]
-            if not valid_snaps:
-                continue
-                
-            current = valid_snaps[0]
-            prev_candidates = [s for s in valid_snaps if s.created_at.date() <= from_date]
-            
-            if prev_candidates:
-                previous = prev_candidates[0]
-            else:
-                previous = valid_snaps[-1] if len(valid_snaps) > 1 else None
-                
-            if previous and previous.id == current.id:
-                previous = None
-        else:
-            current = snaps[0]
-            previous = snaps[1] if len(snaps) > 1 else None
-        
-        item = {
-            "reg_no": reg_no,
-            "name": current.name,
-            "easy": current.easy,
-            "medium": current.medium,
-            "hard": current.hard,
-            "current_total": current.total_solved,
-            "previous_total": previous.total_solved if previous else "N/A",
-            "this_week": (current.total_solved - previous.total_solved) if previous else "N/A"
-        }
-        analysis.append(item)
-        
-    analysis.sort(key=lambda x: x["name"])
-    return analysis
 
-@router.get("/weekly-analysis")
-async def get_weekly_analysis(from_date: str = None, to_date: str = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    analysis = get_analysis_for_date_range(db, current_user.id, from_date, to_date)
-    return {"analysis": analysis}
-
-@router.get("/weekly-analysis/download")
-async def download_weekly_analysis(from_date: str = None, to_date: str = None, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    analysis = get_analysis_for_date_range(db, current_user.id, from_date, to_date)
-    
-    import pandas as pd
-    import io
-    
-    df_data = []
-    for item in analysis:
-        df_data.append({
-            "Name": item["name"],
-            "Easy": item["easy"],
-            "Medium": item["medium"],
-            "Hard": item["hard"],
-            "Previous": item["previous_total"],
-            "Current": item["current_total"],
-            "This Week": item["this_week"]
-        })
-        
-    df = pd.DataFrame(df_data)
-    output = io.BytesIO()
-    
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Weekly Analysis')
-        worksheet = writer.sheets['Weekly Analysis']
-        
-        # Openpyxl doesn't support set_column directly on worksheet easily like xlsxwriter does,
-        # so let's keep it simple and just use the default column widths, which is fine since we just need the data.
-        
-    output.seek(0)
-    
-    filename = f"Weekly_Analysis_{from_date}_to_{to_date}.xlsx" if from_date and to_date else "Weekly_Analysis.xlsx"
-    headers = {'Content-Disposition': f'attachment; filename="{filename}"'}
-    return Response(
-        content=output.getvalue(),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers=headers
-    )
 
 @router.get("/template")
 async def download_template():
